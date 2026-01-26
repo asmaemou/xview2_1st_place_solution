@@ -15,7 +15,7 @@ from torch.autograd import Variable
 import timeit
 import cv2
 
-os.environ["CUDA_VISIBLE_DEVICES"] = ''
+# os.environ["CUDA_VISIBLE_DEVICES"] = ''
 
 from zoo.models import SeResNext50_Unet_Loc
 
@@ -41,7 +41,10 @@ if __name__ == '__main__':
 
     for seed in [0, 1, 2]:
         snap_to_load = 'res50_loc_{}_tuned_best'.format(seed)
-        model = SeResNext50_Unet_Loc(pretrained=None)
+        # model = SeResNext50_Unet_Loc(pretrained=None)
+        model = SeResNext50_Unet_Loc(pretrained=None).cuda()
+        model = nn.DataParallel(model).cuda()
+
         
         print("=> loading checkpoint '{}'".format(snap_to_load))
         checkpoint = torch.load(path.join(models_folder, snap_to_load), map_location='cpu')

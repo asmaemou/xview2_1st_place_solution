@@ -25,7 +25,8 @@ from utils import *
 cv2.setNumThreads(0)
 cv2.ocl.setUseOpenCL(False)
 
-test_dir = 'test/images'
+# test_dir = 'test/images'
+test_dir = 'idabd/images'    
 pred_folder = 'pred34_loc'
 models_folder = 'weights'
 
@@ -42,11 +43,11 @@ if __name__ == '__main__':
     models = []
 
     for seed in [0, 1, 2]:
-        snap_to_load = 'res34_loc_{}_1_best'.format(seed)
+        snap_to_load = 'res34_loc_{}_1_best.pth'.format(seed)
         model = Res34_Unet_Loc().cuda()
         model = nn.DataParallel(model).cuda()
         print("=> loading checkpoint '{}'".format(snap_to_load))
-        checkpoint = torch.load(path.join(models_folder, snap_to_load), map_location='cpu')
+        checkpoint = torch.load(path.join(models_folder, snap_to_load), map_location='cpu', weights_only=False)
         loaded_dict = checkpoint['state_dict']
         sd = model.state_dict()
         for k in model.state_dict():
@@ -92,7 +93,9 @@ if __name__ == '__main__':
                 
                 msk = pred_full * 255
                 msk = msk.astype('uint8').transpose(1, 2, 0)
-                cv2.imwrite(path.join(pred_folder, '{0}.png'.format(f.replace('.png', '_part1.png'))), msk[..., 0], [cv2.IMWRITE_PNG_COMPRESSION, 9])
+                # cv2.imwrite(path.join(pred_folder, '{0}.png'.format(f.replace('.png', '_part1.png'))), msk[..., 0], [cv2.IMWRITE_PNG_COMPRESSION, 9])
+                out1 = f.replace('.png', '_part1.png')
+                cv2.imwrite(path.join(pred_folder, out1), msk[..., 0], [cv2.IMWRITE_PNG_COMPRESSION, 9])
 
     elapsed = timeit.default_timer() - t0
     print('Time: {:.3f} min'.format(elapsed / 60))

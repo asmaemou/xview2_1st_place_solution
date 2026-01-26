@@ -9,6 +9,9 @@ import numpy as np
 np.random.seed(1)
 import random
 random.seed(1)
+# FDA
+from glob import glob
+from fda import apply_fda_uint8
 
 import torch
 from torch import nn
@@ -17,7 +20,9 @@ from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 import torch.optim.lr_scheduler as lr_scheduler
 
-from apex import amp
+# from apex import amp
+from torch.cuda.amp import autocast, GradScaler
+
 
 from adamw import AdamW
 from losses import dice_round, ComboLoss
@@ -52,6 +57,18 @@ loc_folder = 'pred_loc_val'
 
 input_shape = (512, 512)
 
+# -------------------------
+# FDA domain adaptation
+# -------------------------
+USE_FDA = True          # master switch
+FDA_PROB = 0.5          # probability per sample
+FDA_BETA = 0.01         # strength (0.01 mild, 0.03 stronger)
+
+IDABD_STYLE_DIR = "idabd/images"
+IDABD_STYLE_FILES = sorted(glob(path.join(IDABD_STYLE_DIR, "*_pre_disaster.png")))
+
+if USE_FDA:
+    print("[FDA] style images found:", len(IDABD_STYLE_FILES))
 
 all_files = []
 for d in train_dirs:
@@ -65,6 +82,8 @@ class TrainData(Dataset):
         super().__init__()
         self.train_idxs = train_idxs
         self.elastic = iaa.ElasticTransformation(alpha=(0.25, 1.2), sigma=0.2)
+        self.style_files = IDABD_STYLE_FILES #FDA
+
 
     def __len__(self):
         return len(self.train_idxs)
@@ -165,6 +184,25 @@ class TrainData(Dataset):
             msk2 = cv2.resize(msk2, input_shape, interpolation=cv2.INTER_LINEAR)
             msk3 = cv2.resize(msk3, input_shape, interpolation=cv2.INTER_LINEAR)
             msk4 = cv2.resize(msk4, input_shape, interpolation=cv2.INTER_LINEAR)
+
+        # -------- FDA: make xBD (source) look like IDABD (target) --------
+        # Important: apply the SAME target style to BOTH img and img2 (Siamese)
+        if USE_FDA and self.style_files and (random.random() < FDA_PROB):
+            tgt_fn = random.choice(self.style_files)
+            tgt = cv2.imread(tgt_fn, cv2.IMREAD_COLOR)
+            if tgt is not None:
+                # match spatial size to current crop
+                tgt = cv2.resize(tgt, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
+
+                img  = apply_fda_uint8(img,  tgt, beta=FDA_BETA)
+                img2 = apply_fda_uint8(img2, tgt, beta=FDA_BETA)
+
+        # (then continue with your existing color aug below)
+        if random.random() > 0.9:
+            img = shift_channels(img, random.randint(-5, 5), random.randint(-5, 5), random.randint(-5, 5))
+        elif random.random() > 0.9:
+            img2 = shift_channels(img2, random.randint(-5, 5), random.randint(-5, 5), random.randint(-5, 5))
+
             
 
         if random.random() > 0.96:

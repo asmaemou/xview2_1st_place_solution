@@ -1,0 +1,24 @@
+idabd
+xbd
+train
+tier3
+test
+weights
+# --- Model checkpoints / weights (too large for GitHub) ---
+*.pth
+*.pt
+*.ckpt
+
+# If you want to keep small ones, ignore only in these folders instead:
+new_approach/idabd_stage1_loc_ft_checkpoints/
+new_approach/idabd_stage2_damage_ft_checkpoints/
+new_approach/idabd_stage2_damage_ft_checkpoints_retrained_destroyed/
+new_approach/idabd_stage2_damage_ft_checkpoints_retrained_destroyed_NOFUSION/
+new_approach/weights/
+weights/
+
+# Optional (often large)
+*.npz
+*.pkl
+*.h5
+*.onnx

@@ -104,6 +104,7 @@ class SEModule(nn.Module):
         x = self.sigmoid(x)
         return module_input * x
 
+
 class SCSEModule(nn.Module):
     # according to https://arxiv.org/pdf/1808.08127.pdf concat is better
     def __init__(self, channels, reduction=16, concat=False):
@@ -137,6 +138,7 @@ class SCSEModule(nn.Module):
             return torch.cat([chn_se, spa_se], dim=1)
         else:
             return chn_se + spa_se
+
 
 class Bottleneck(nn.Module):
     """
@@ -262,7 +264,6 @@ class SEResNeXtBottleneck(Bottleneck):
         self.stride = stride
 
 
-
 class SCSEResNeXtBottleneck(Bottleneck):
     """
     ResNeXt bottleneck type C with a Concurrent Spatial Squeeze-and-Excitation module.
@@ -292,49 +293,6 @@ class SENet(nn.Module):
     def __init__(self, block, layers, groups, reduction, dropout_p=0.2,
                  inplanes=128, input_3x3=True, downsample_kernel_size=3,
                  downsample_padding=1, num_classes=1000):
-        """
-        Parameters
-        ----------
-        block (nn.Module): Bottleneck class.
-            - For SENet154: SEBottleneck
-            - For SE-ResNet models: SEResNetBottleneck
-            - For SE-ResNeXt models:  SEResNeXtBottleneck
-        layers (list of ints): Number of residual blocks for 4 layers of the
-            network (layer1...layer4).
-        groups (int): Number of groups for the 3x3 convolution in each
-            bottleneck block.
-            - For SENet154: 64
-            - For SE-ResNet models: 1
-            - For SE-ResNeXt models:  32
-        reduction (int): Reduction ratio for Squeeze-and-Excitation modules.
-            - For all models: 16
-        dropout_p (float or None): Drop probability for the Dropout layer.
-            If `None` the Dropout layer is not used.
-            - For SENet154: 0.2
-            - For SE-ResNet models: None
-            - For SE-ResNeXt models: None
-        inplanes (int):  Number of input channels for layer1.
-            - For SENet154: 128
-            - For SE-ResNet models: 64
-            - For SE-ResNeXt models: 64
-        input_3x3 (bool): If `True`, use three 3x3 convolutions instead of
-            a single 7x7 convolution in layer0.
-            - For SENet154: True
-            - For SE-ResNet models: False
-            - For SE-ResNeXt models: False
-        downsample_kernel_size (int): Kernel size for downsampling convolutions
-            in layer2, layer3 and layer4.
-            - For SENet154: 3
-            - For SE-ResNet models: 1
-            - For SE-ResNeXt models: 1
-        downsample_padding (int): Padding for downsampling convolutions in
-            layer2, layer3 and layer4.
-            - For SENet154: 1
-            - For SE-ResNet models: 0
-            - For SE-ResNeXt models: 0
-        num_classes (int): Number of outputs in `last_linear` layer.
-            - For all models: 1000
-        """
         super(SENet, self).__init__()
         self.inplanes = inplanes
         if input_3x3:
@@ -359,8 +317,6 @@ class SENet(nn.Module):
                 ('bn1', nn.BatchNorm2d(inplanes)),
                 ('relu1', nn.ReLU(inplace=True)),
             ]
-        # To preserve compatibility with Caffe weights `ceil_mode=True`
-        # is used instead of `padding=1`.
         self.pool = nn.MaxPool2d(3, stride=2, ceil_mode=True)
         self.layer0 = nn.Sequential(OrderedDict(layer0_modules))
         self.layer1 = self._make_layer(
@@ -422,7 +378,7 @@ class SENet(nn.Module):
         layers.append(block(self.inplanes, planes, groups, reduction, stride,
                             downsample))
         self.inplanes = planes * block.expansion
-        for i in range(1, blocks):
+        for _ in range(1, blocks):
             layers.append(block(self.inplanes, planes, groups, reduction))
 
         return nn.Sequential(*layers)
@@ -475,16 +431,17 @@ def initialize_pretrained_model(model, num_classes, settings):
 def senet154(num_classes=1000, pretrained='imagenet'):
     model = SENet(SEBottleneck, [3, 8, 36, 3], groups=64, reduction=16,
                   dropout_p=0.2, num_classes=num_classes)
-    if pretrained is not None:
+    # IMPORTANT: only load pretrained weights if 'pretrained' is truthy (e.g. 'imagenet')
+    if pretrained:
         settings = pretrained_settings['senet154'][pretrained]
         initialize_pretrained_model(model, num_classes, settings)
     return model
 
+
 def scsenet154(num_classes=1000, pretrained='imagenet'):
-    print("scsenet154")
     model = SENet(SCSEBottleneck, [3, 8, 36, 3], groups=64, reduction=16,
                   dropout_p=0.2, num_classes=num_classes)
-    if pretrained is not None:
+    if pretrained:
         settings = pretrained_settings['senet154'][pretrained]
         initialize_pretrained_model(model, num_classes, settings)
     return model
@@ -495,7 +452,7 @@ def se_resnet50(num_classes=1000, pretrained='imagenet'):
                   dropout_p=None, inplanes=64, input_3x3=False,
                   downsample_kernel_size=1, downsample_padding=0,
                   num_classes=num_classes)
-    if pretrained is not None:
+    if pretrained:
         settings = pretrained_settings['se_resnet50'][pretrained]
         initialize_pretrained_model(model, num_classes, settings)
     return model
@@ -506,7 +463,7 @@ def se_resnet101(num_classes=1000, pretrained='imagenet'):
                   dropout_p=None, inplanes=64, input_3x3=False,
                   downsample_kernel_size=1, downsample_padding=0,
                   num_classes=num_classes)
-    if pretrained is not None:
+    if pretrained:
         settings = pretrained_settings['se_resnet101'][pretrained]
         initialize_pretrained_model(model, num_classes, settings)
     return model
@@ -517,7 +474,7 @@ def se_resnet152(num_classes=1000, pretrained='imagenet'):
                   dropout_p=None, inplanes=64, input_3x3=False,
                   downsample_kernel_size=1, downsample_padding=0,
                   num_classes=num_classes)
-    if pretrained is not None:
+    if pretrained:
         settings = pretrained_settings['se_resnet152'][pretrained]
         initialize_pretrained_model(model, num_classes, settings)
     return model
@@ -528,7 +485,8 @@ def se_resnext50_32x4d(num_classes=1000, pretrained='imagenet'):
                   dropout_p=None, inplanes=64, input_3x3=False,
                   downsample_kernel_size=1, downsample_padding=0,
                   num_classes=num_classes)
-    if pretrained is not None:
+    # IMPORTANT: this prevents KeyError when pretrained=False, and prevents downloads when pretrained=None/False
+    if pretrained:
         settings = pretrained_settings['se_resnext50_32x4d'][pretrained]
         initialize_pretrained_model(model, num_classes, settings)
     return model
@@ -539,7 +497,7 @@ def scse_resnext50_32x4d(num_classes=1000, pretrained='imagenet'):
                   dropout_p=None, inplanes=64, input_3x3=False,
                   downsample_kernel_size=1, downsample_padding=0,
                   num_classes=num_classes)
-    if pretrained is not None:
+    if pretrained:
         settings = pretrained_settings['se_resnext50_32x4d'][pretrained]
         initialize_pretrained_model(model, num_classes, settings)
     return model
@@ -550,12 +508,12 @@ def se_resnext101_32x4d(num_classes=1000, pretrained='imagenet'):
                   dropout_p=None, inplanes=64, input_3x3=False,
                   downsample_kernel_size=1, downsample_padding=0,
                   num_classes=num_classes)
-    if pretrained is not None:
+    if pretrained:
         settings = pretrained_settings['se_resnext101_32x4d'][pretrained]
         initialize_pretrained_model(model, num_classes, settings)
     return model
+
+
 if __name__ == '__main__':
-
-
-    print(se_resnext50_32x4d())
-
+    # Avoid accidental download if you run this file directly:
+    print(se_resnext50_32x4d(pretrained=None))

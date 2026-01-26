@@ -130,23 +130,41 @@ def dpn68b(num_classes=1000, pretrained='imagenet+5k'):
         model.std = settings['std']
     return model
 
-def dpn92(num_classes=1000, pretrained='imagenet+5k'):
+# def dpn92(num_classes=1000, pretrained='imagenet+5k'):
+#     model = DPN(
+#         num_init_features=64, k_r=96, groups=32,
+#         k_sec=(3, 4, 20, 3), inc_sec=(16, 32, 24, 128),
+#         num_classes=num_classes, test_time_pool=True)
+#     if pretrained:
+#         settings = pretrained_settings['dpn92'][pretrained]
+#         assert num_classes == settings['num_classes'], \
+#             "num_classes should be {}, but is {}".format(settings['num_classes'], num_classes)
+
+#         model.load_state_dict(model_zoo.load_url(settings['url']))
+#         model.input_space = settings['input_space']
+#         model.input_size = settings['input_size']
+#         model.input_range = settings['input_range']
+#         model.mean = settings['mean']
+#         model.std = settings['std']
+#     return model
+def dpn92(num_classes=1000, pretrained='imagenet+5k', **kwargs):
     model = DPN(
         num_init_features=64, k_r=96, groups=32,
         k_sec=(3, 4, 20, 3), inc_sec=(16, 32, 24, 128),
-        num_classes=num_classes, test_time_pool=True)
-    if pretrained:
-        settings = pretrained_settings['dpn92'][pretrained]
-        assert num_classes == settings['num_classes'], \
-            "num_classes should be {}, but is {}".format(settings['num_classes'], num_classes)
+        num_classes=num_classes, **kwargs
+    )
 
+    # ADD THIS: allow disabling pretrained downloads
+    if pretrained in [None, False, "None", "none", ""]:
+        pretrained = None
+
+    # CHANGE THIS: only download/load if pretrained is not None
+    if pretrained is not None:
+        settings = pretrained_settings['dpn92'][pretrained]
         model.load_state_dict(model_zoo.load_url(settings['url']))
-        model.input_space = settings['input_space']
-        model.input_size = settings['input_size']
-        model.input_range = settings['input_range']
-        model.mean = settings['mean']
-        model.std = settings['std']
+
     return model
+
 
 def dpn98(num_classes=1000, pretrained='imagenet'):
     model = DPN(

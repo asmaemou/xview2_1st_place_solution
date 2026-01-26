@@ -1,5 +1,4 @@
 import os
-
 from os import path, makedirs, listdir
 import sys
 import numpy as np
@@ -9,100 +8,116 @@ random.seed(1)
 
 import torch
 from torch import nn
-from torch.backends import cudnn
 from torch.autograd import Variable
 
-import pandas as pd
 from tqdm import tqdm
 import timeit
 import cv2
 
 from zoo.models import SeNet154_Unet_Double
-
-from utils import *
+from utils import preprocess_inputs
 
 cv2.setNumThreads(0)
 cv2.ocl.setUseOpenCL(False)
 
-test_dir = 'test/images'
+# ---------
+# CONFIG
+# ---------
+test_dir = 'idabd/images'   # ✅ changed from test/images
 models_folder = 'weights'
 
 if __name__ == '__main__':
     t0 = timeit.default_timer()
 
     seed = int(sys.argv[1])
-    # vis_dev = sys.argv[2]
 
-    # os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
-    # os.environ["CUDA_VISIBLE_DEVICES"] = vis_dev
-
-    pred_folder = 'se154cls_{}_tuned'.format(seed)
+    pred_folder = f'se154cls_{seed}_tuned'
     makedirs(pred_folder, exist_ok=True)
-
-    # cudnn.benchmark = True
 
     models = []
 
-    snap_to_load = 'se154_cls_cce_{}_tuned_best'.format(seed)
+    # ✅ include .pth
+    snap_to_load = f'se154_cls_cce_{seed}_tuned_best.pth'
 
-    model = SeNet154_Unet_Double().cuda()
-
+    # ✅ CRITICAL: prevent downloading ImageNet weights (SSL crash)
+    model = SeNet154_Unet_Double(pretrained=None).cuda()
     model = nn.DataParallel(model).cuda()
-    
-    print("=> loading checkpoint '{}'".format(snap_to_load))
-    checkpoint = torch.load(path.join(models_folder, snap_to_load), map_location='cpu')
+
+    print(f"=> loading checkpoint '{snap_to_load}'")
+
+    # ✅ PyTorch 2.6 fix
+    checkpoint = torch.load(
+        path.join(models_folder, snap_to_load),
+        map_location='cpu',
+        weights_only=False
+    )
+
     loaded_dict = checkpoint['state_dict']
     sd = model.state_dict()
-    for k in model.state_dict():
+    for k in sd:
         if k in loaded_dict and sd[k].size() == loaded_dict[k].size():
             sd[k] = loaded_dict[k]
-    loaded_dict = sd
-    model.load_state_dict(loaded_dict)
+    model.load_state_dict(sd)
+
     print("loaded checkpoint '{}' (epoch {}, best_score {})"
-            .format(snap_to_load, checkpoint['epoch'], checkpoint['best_score']))
+          .format(
+              snap_to_load,
+              checkpoint.get('epoch', 'NA'),
+              checkpoint.get('best_score', 'NA')
+          ))
 
     model.eval()
     models.append(model)
 
     with torch.no_grad():
         for f in tqdm(sorted(listdir(test_dir))):
-            if '_pre_' in f:
-                fn = path.join(test_dir, f)
+            if '_pre_' not in f:
+                continue
 
-                img = cv2.imread(fn, cv2.IMREAD_COLOR)
-                img2 = cv2.imread(fn.replace('_pre_', '_post_'), cv2.IMREAD_COLOR)
+            fn = path.join(test_dir, f)
 
-                img = np.concatenate([img, img2], axis=2)
-                img = preprocess_inputs(img)
+            img = cv2.imread(fn, cv2.IMREAD_COLOR)
+            img2 = cv2.imread(fn.replace('_pre_', '_post_'), cv2.IMREAD_COLOR)
 
-                inp = []
-                inp.append(img)
-                inp.append(img[::-1, ...])
-                inp.append(img[:, ::-1, ...])
-                inp.append(img[::-1, ::-1, ...])
-                inp = np.asarray(inp, dtype='float')
-                inp = torch.from_numpy(inp.transpose((0, 3, 1, 2))).float()
-                inp = Variable(inp).cuda()
+            img = np.concatenate([img, img2], axis=2)
+            img = preprocess_inputs(img)
 
-                pred = []
-                for model in models:               
-                    msk = model(inp)
-                    msk = torch.softmax(msk[:, :, ...], dim=1)
-                    msk = msk.cpu().numpy()
-                    
-                    msk[:, 0, ...] = 1 - msk[:, 0, ...]
-                    
-                    pred.append(msk[0, ...])
-                    pred.append(msk[1, :, ::-1, :])
-                    pred.append(msk[2, :, :, ::-1])
-                    pred.append(msk[3, :, ::-1, ::-1])
+            # TTA
+            inp = [
+                img,
+                img[::-1, ...],
+                img[:, ::-1, ...],
+                img[::-1, ::-1, ...]
+            ]
+            inp = np.asarray(inp, dtype='float')
+            inp = torch.from_numpy(inp.transpose((0, 3, 1, 2))).float()
+            inp = Variable(inp).cuda()
 
-                pred_full = np.asarray(pred).mean(axis=0)
-                
-                msk = pred_full * 255
-                msk = msk.astype('uint8').transpose(1, 2, 0)
-                cv2.imwrite(path.join(pred_folder, '{0}.png'.format(f.replace('.png', '_part1.png'))), msk[..., :3], [cv2.IMWRITE_PNG_COMPRESSION, 9])
-                cv2.imwrite(path.join(pred_folder, '{0}.png'.format(f.replace('.png', '_part2.png'))), msk[..., 2:], [cv2.IMWRITE_PNG_COMPRESSION, 9])
+            pred = []
+            for m in models:
+                out = m(inp)
+                out = torch.softmax(out[:, :, ...], dim=1).detach().cpu().numpy()
+
+                # match repo logic: flip "background" channel
+                out[:, 0, ...] = 1 - out[:, 0, ...]
+
+                pred.append(out[0, ...])
+                pred.append(out[1, :, ::-1, :])
+                pred.append(out[2, :, :, ::-1])
+                pred.append(out[3, :, ::-1, ::-1])
+
+            pred_full = np.asarray(pred).mean(axis=0)
+
+            msk = (pred_full * 255).astype('uint8').transpose(1, 2, 0)
+
+            # ✅ avoid .png.png
+            out1 = f.replace('.png', '_part1.png')
+            out2 = f.replace('.png', '_part2.png')
+
+            cv2.imwrite(path.join(pred_folder, out1), msk[..., :3],
+                        [cv2.IMWRITE_PNG_COMPRESSION, 9])
+            cv2.imwrite(path.join(pred_folder, out2), msk[..., 2:],
+                        [cv2.IMWRITE_PNG_COMPRESSION, 9])
 
     elapsed = timeit.default_timer() - t0
     print('Time: {:.3f} min'.format(elapsed / 60))
