@@ -1291,11 +1291,8 @@ def main():
             raise FileNotFoundError(args.init_weight)
         train_and_eval_pipeline_one(args, args.init_weight)
 
-
 if __name__ == "__main__":
     main()
-
-
 """
 python train_idabd_stage2_pipeline_damage_f1_gated.py --train_all --val_ratio 0.1 --test_ratio 0.1 --epochs 15 --batch 2 --lr 1e-4 --amp --use_class_weights --destroyed_weight_mul 3.0 --focus_destroyed_p 0.6 --min_destroyed_px 50 --crop_attempts 20 --calib_pixels_per_class 50000 --loc_weight idabd_stage1_loc_ft_checkpoints/dpn92_loc_0_tuned_best_idabd_ft_best.pth --loc_platt idabd_stage1_loc_ft_checkpoints/dpn92_loc_0_tuned_best_idabd_platt.npz --loc_thresh 0.5 --csv_path idabd_stage2_pipeline_results_DESTROYED_DEFENSIBLE.csv --overwrite_csv
 
