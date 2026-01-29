@@ -8,7 +8,7 @@ weights
 *.pth
 *.pt
 *.ckpt
-
+/new_approach/xbd_source/
 # If you want to keep small ones, ignore only in these folders instead:
 new_approach/idabd_stage1_loc_ft_checkpoints/
 new_approach/idabd_stage2_damage_ft_checkpoints/
