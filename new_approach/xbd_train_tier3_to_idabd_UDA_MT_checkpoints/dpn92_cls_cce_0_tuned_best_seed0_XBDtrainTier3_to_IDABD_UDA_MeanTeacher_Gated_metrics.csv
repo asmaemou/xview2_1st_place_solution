@@ -1,0 +1,1 @@
+run_tag,init_weight,loc_weight,seed,epoch,split,train_loss,val_loss,pipeline_acc,pipeline_loc_precision,pipeline_loc_recall,pipeline_loc_f1,pipeline_macroF1_damage,pipeline_f1_no_damage,pipeline_f1_minor,pipeline_f1_major,pipeline_f1_destroyed
