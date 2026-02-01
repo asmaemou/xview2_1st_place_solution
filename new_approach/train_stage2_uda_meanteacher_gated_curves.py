@@ -3,19 +3,92 @@
 
 """
 ================================================================================
-UDA: XBD(train + tier3) -> IDA-BD  (Stage-2 Damage)
+UDA (Unsupervised Domain Adaptation): XBD(train + tier3) -> IDA-BD  (Stage-2 Damage)
 Mean Teacher + Building-Gated Pseudo Labels (Stage-1 localization gate)
+================================================================================
 
-Key stability fixes (8GB GPU + Windows friendly):
-  ✅ Disable DataLoader pin_memory (prevents pin thread CUDA OOM on Windows)
-  ✅ Default WORKERS=0 (most stable on Windows; increase later if stable)
-  ✅ Gradient accumulation (ACCUM_STEPS) to keep memory low
-  ✅ Split backward passes (source loss backward, then target loss backward)
-     -> avoids keeping BOTH graphs at the same time (big memory win)
-  ✅ Ensure losses are always tensors (prevents "does not require grad" crash)
+WHAT YOU ARE DOING (in simple terms)
+------------------------------------
+You have two domains:
 
+(1) SOURCE domain (labeled):
+    - XBD train + tier3
+    - has (pre, post, damage_mask) labels
+    - used with standard supervised learning (Cross Entropy on building pixels)
+
+(2) TARGET domain (unlabeled for training):
+    - IDA-BD train split (we treat it as UNLABELED)
+    - we do NOT use target masks for training
+    - we only use target masks for VAL/TEST evaluation (to measure F1, etc.)
+
+WHY THIS IS "UNSUPERVISED DOMAIN ADAPTATION"
+--------------------------------------------
+It’s called UDA because you adapt the model to the target domain WITHOUT using
+target labels during training.
+- You DO use labeled source data (XBD) -> supervised loss
+- You DO use unlabeled target images (IDA-BD train split) -> pseudo-label loss
+- You DO NOT backprop using IDA-BD ground-truth masks during training
+
+THE TECHNIQUE: MEAN TEACHER + PSEUDO LABELS
+-------------------------------------------
+You train TWO models:
+
+A) STUDENT model (trainable)
+   - gets gradients
+   - learns from:
+       1) Source supervised loss (XBD labels)
+       2) Target pseudo-label loss (IDA-BD unlabeled)
+
+B) TEACHER model (not trained by gradients)
+   - updated by EMA (exponential moving average) of student weights:
+        teacher = EMA(student)
+   - produces stable predictions on target images (pseudo labels)
+
+Pseudo-labeling on target:
+- Teacher predicts class probabilities on target images (weak augmentation).
+- Keep only pixels with high confidence (PL_CONF).
+- Apply a "building gate": only trust pseudo labels inside building regions.
+
+BUILDING-GATED PSEUDO LABELS (Stage-1 localization gate)
+--------------------------------------------------------
+Damage labels only make sense where buildings exist.
+So you use a separate pretrained localization network (Stage-1 LOC) to compute
+a binary building mask, and you restrict pseudo-label loss to those pixels.
+
+In short:
+- Stage-1 LOC: "where are buildings?"
+- Teacher: "what damage class is it?"
+- Student learns target adaptation only on confident building pixels.
+
+IMPORTANT IMPROVEMENTS IN THIS VERSION
+--------------------------------------
+1) Stability (prevents NaNs):
+   - AMP disabled by default (you can re-enable later)
+   - Lower LR
+   - Gradient clipping
+   - Skip non-finite losses safely
+
+2) Better building gate (higher recall on IDA-BD):
+   - Optional OR gate using BOTH pre and post (LOC_USE_PREPOST_OR)
+   - Optional mask dilation (LOC_DILATE) to avoid missing building edges
+   - Lower default LOC_THRESH
+
+3) Better source supervision signal:
+   - Labeled random crops try multiple times to include building pixels
+
+OUTPUTS
+-------
+- Per epoch: appends 1 row to metrics CSV (val_curve or test_curve) with:
+    * pipeline_loc_f1 (building)
+    * F1 for 4 damage classes (no-damage/minor/major/destroyed)
+    * macroF1 damage (1..4)
+    * pipeline accuracy (0..4)
+- End: evaluates BEST checkpoint on target TEST split and appends "test_final" row.
+- Also saves a curves PNG.
+
+================================================================================
 Run:
-    python train_xbd_train_tier3_to_idabd_stage2_uda_meanteacher_gated_curves.py
+    python train_stage2_uda_meanteacher_gated_curves.py
 ================================================================================
 """
 
@@ -26,10 +99,17 @@ CONFIG = {
     # ----------------------------
     # Paths
     # ----------------------------
-    "XBD_SOURCE_ROOTS": ["xbd/train", "xbd/tier3"],   # labeled source
-    "IDABD_IMG_DIR": "idabd/images",                 # target images (pre+post)
-    "IDABD_MASK_DIR": "idabd/masks",                 # target masks (VAL/TEST only)
+    "XBD_SOURCE_ROOTS": [
+        r"C:\Users\asmae mouradi\Documents\GitHub\USADA_damage_detection\DA1_GAN\data\xbd\train",
+        r"C:\Users\asmae mouradi\Documents\GitHub\USADA_damage_detection\DA1_GAN\data\xbd\tier3",
+    ],
+
+    # Target (IDA-BD)
+    "IDABD_IMG_DIR": "idabd/images",     # target images (pre+post)
+    "IDABD_MASK_DIR": "idabd/masks",     # target masks (VAL/TEST only)
+
     "WEIGHTS_DIR": "weights",
+
     # ----------------------------
     # Train/Eval split
     # ----------------------------
@@ -40,38 +120,43 @@ CONFIG = {
     # ----------------------------
     # Training
     # ----------------------------
-    "EPOCHS": 10,
+    "EPOCHS": 30,               # UDA usually needs more epochs
     "BATCH": 1,                 # keep small for 8GB GPU
     "ACCUM_STEPS": 2,           # effective batch = BATCH * ACCUM_STEPS
-    "LR": 1e-4,
+    "LR": 3e-5,                 # lower LR for stability
     "WD": 1e-4,
     "WORKERS": 0,               # Windows stable default
     "PIN_MEMORY": False,        # IMPORTANT: prevents pin thread CUDA OOM
-    "AMP": True,
+    "AMP": False,               # start stable; re-enable later if you want
     "SEED": 0,
 
     # crops + augment
     "CROP": 512,                # if still OOM, reduce to 384
     "SRC_FUSION_P": 0.0,
-    "TGT_FUSION_P": 0.75,
+    "TGT_FUSION_P": 0.50,       # less aggressive early; helps teacher stability
 
     # loss weights and ramp
     "SRC_LAMBDA": 1.0,
-    "UDA_LAMBDA": 1.0,
-    "UDA_RAMP_EPOCHS": 5,
+    "UDA_LAMBDA": 0.5,          # lower UDA weight (more stable)
+    "UDA_RAMP_EPOCHS": 10,      # slower ramp
 
     # Mean Teacher EMA
     "EMA_DECAY": 0.999,
 
     # pseudo label filtering
-    "PL_CONF": 0.85,
-    "PL_CONF_DESTROYED": 0.75,
+    "PL_CONF": 0.75,
+    "PL_CONF_DESTROYED": 0.65,
     "PL_TEMP": 1.0,
     "UDA_USE_KL": False,
 
     # Stage-1 localization gate
-    "LOC_THRESH": 0.5,
+    "LOC_THRESH": 0.05,
     "LOC_PLATT": "",
+    "LOC_USE_PREPOST_OR": True,  # OR(pre, post) improves recall
+    "LOC_DILATE": 2,             # dilate mask by 2 pixels (via maxpool)
+
+    # stability extras
+    "GRAD_CLIP_NORM": 1.0,       # gradient clipping
 
     # weights
     "LOC_WEIGHT": "",
@@ -91,7 +176,6 @@ CONFIG = {
 # =============================================================================
 
 import os
-# Helps fragmentation sometimes (safe to keep). Must be before CUDA allocations.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
 
 from os import path
@@ -407,6 +491,24 @@ class LabeledDamageDataset(Dataset):
             post = cv2.copyMakeBorder(post, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT_101)
             mask = np.pad(mask, ((0, pad_h), (0, pad_w)), mode="edge")
             h, w = mask.shape[:2]
+
+        # Try a few times to include building pixels (1..4)
+        y0 = x0 = 0
+        last_crop = None
+        for _ in range(10):
+            y0 = self.rng.randint(0, h - size)
+            x0 = self.rng.randint(0, w - size)
+            m = mask[y0:y0+size, x0:x0+size]
+            last_crop = (y0, x0, m)
+            if np.any((m >= 1) & (m <= 4)):
+                return pre[y0:y0+size, x0:x0+size], post[y0:y0+size, x0:x0+size], m
+
+        # Fallback: last random crop
+        if last_crop is not None:
+            y0, x0, m = last_crop
+            return pre[y0:y0+size, x0:x0+size], post[y0:y0+size, x0:x0+size], m
+
+        # Should not happen, but keep safe:
         y0 = self.rng.randint(0, h - size)
         x0 = self.rng.randint(0, w - size)
         return pre[y0:y0+size, x0:x0+size], post[y0:y0+size, x0:x0+size], mask[y0:y0+size, x0:x0+size]
@@ -607,21 +709,40 @@ def uda_pseudo_label_loss(
     return loss_ce + kl_map[valid].mean()
 
 # =============================================================================
-# Stage-1 building gate
+# Stage-1 building gate (improved)
 # =============================================================================
 @torch.no_grad()
-def predict_build_mask_from_x6(loc_model, x6, a, b, thresh):
-    pre = x6[:, 0:3, :, :]
-    logit = loc_model(pre)
-    if isinstance(logit, (tuple, list)):
-        logit = logit[0]
-    if logit.ndim == 3:
-        logit = logit.unsqueeze(1)
-    if logit.ndim == 4 and logit.shape[1] > 1:
-        logit = logit[:, 0:1, :, :]
-    logit = a * logit + b
-    prob = torch.sigmoid(logit)[:, 0, :, :]
-    return prob >= thresh
+def predict_build_mask_from_x6(loc_model, x6, a, b, thresh, use_prepost_or=False, dilate=0):
+    pre  = x6[:, 0:3, :, :]
+    post = x6[:, 3:6, :, :]
+
+    def _prob(img3):
+        logit = loc_model(img3)
+        if isinstance(logit, (tuple, list)):
+            logit = logit[0]
+        if logit.ndim == 3:
+            logit = logit.unsqueeze(1)
+        if logit.ndim == 4 and logit.shape[1] > 1:
+            logit = logit[:, 0:1, :, :]
+        logit = a * logit + b
+        return torch.sigmoid(logit)  # [B,1,H,W]
+
+    p_pre = _prob(pre)
+    if use_prepost_or:
+        p_post = _prob(post)
+        p = torch.maximum(p_pre, p_post)
+    else:
+        p = p_pre
+
+    mask = (p[:, 0, :, :] >= float(thresh))  # [B,H,W] bool
+
+    d = int(dilate)
+    if d > 0:
+        k = 2 * d + 1
+        mask_f = mask.float().unsqueeze(1)  # [B,1,H,W]
+        mask = (F.max_pool2d(mask_f, kernel_size=k, stride=1, padding=d)[:, 0] > 0.0)
+
+    return mask
 
 # =============================================================================
 # Metrics + pipeline eval
@@ -651,7 +772,8 @@ def prf_from_counts(tp, fp, fn):
     return float(p), float(r), float(f)
 
 @torch.no_grad()
-def eval_loader_pipeline(model, loader, device, loc_model, loc_a, loc_b, loc_thresh, amp=False):
+def eval_loader_pipeline(model, loader, device, loc_model, loc_a, loc_b, loc_thresh,
+                         use_prepost_or=False, dilate=0, amp=False):
     model.eval()
     loc_model.eval()
 
@@ -672,7 +794,11 @@ def eval_loader_pipeline(model, loader, device, loc_model, loc_a, loc_b, loc_thr
         x = x.to(device)
         raw = raw.to(device)
 
-        build_mask = predict_build_mask_from_x6(loc_model, x, loc_a, loc_b, loc_thresh)
+        build_mask = predict_build_mask_from_x6(
+            loc_model, x, loc_a, loc_b, loc_thresh,
+            use_prepost_or=use_prepost_or,
+            dilate=dilate
+        )
 
         with amp_ctx():
             logits = model(x)
@@ -837,7 +963,6 @@ def make_loader(ds, batch_size, shuffle, workers, pin_memory, drop_last):
         drop_last=bool(drop_last),
         pin_memory=bool(pin_memory),
     )
-    # Only use prefetch/persistent if workers > 0
     if int(workers) > 0:
         kwargs["persistent_workers"] = True
         kwargs["prefetch_factor"] = 2
@@ -883,7 +1008,7 @@ def train_and_eval_one(cfg, init_weight: str, loc_weight: str):
         print(f"[LOC  ] platt: {cfg['LOC_PLATT']} (a={loc_a:.6f}, b={loc_b:.6f})")
     else:
         print("[LOC  ] platt: (none) -> a=1, b=0")
-    print(f"[LOC  ] thresh: {cfg['LOC_THRESH']}")
+    print(f"[LOC  ] thresh: {cfg['LOC_THRESH']} | prepost_or={bool(cfg.get('LOC_USE_PREPOST_OR', False))} | dilate={int(cfg.get('LOC_DILATE',0))}")
 
     # Source triplets
     src_triplets = []
@@ -941,11 +1066,16 @@ def train_and_eval_one(cfg, init_weight: str, loc_weight: str):
         def amp_ctx():
             return torch.cuda.amp.autocast(enabled=amp_on)
 
+    use_prepost_or = bool(cfg.get("LOC_USE_PREPOST_OR", False))
+    dilate = int(cfg.get("LOC_DILATE", 0))
+    grad_clip = float(cfg.get("GRAD_CLIP_NORM", 0.0))
+
     # Baseline only
     if int(cfg["EPOCHS"]) <= 0:
         print("[INFO ] EPOCHS=0 -> baseline: evaluating pretrained XBD weights on IDA-BD TEST only.")
         acc5, macroB, f1sD, locP, locR, locF = eval_loader_pipeline(
-            model, test_ld, device, loc_model, loc_a, loc_b, cfg["LOC_THRESH"], amp=amp_on
+            model, test_ld, device, loc_model, loc_a, loc_b, cfg["LOC_THRESH"],
+            use_prepost_or=use_prepost_or, dilate=dilate, amp=amp_on
         )
         print("\n==================== IDA-BD TEST (PIPELINE) ====================")
         print(f"pipeline_acc(0..4)={acc5:.6f}")
@@ -964,6 +1094,8 @@ def train_and_eval_one(cfg, init_weight: str, loc_weight: str):
 
     accum_steps = max(1, int(cfg.get("ACCUM_STEPS", 1)))
     print(f"[ACCUM] BATCH={cfg['BATCH']} ACCUM_STEPS={accum_steps} (effective batch={cfg['BATCH']*accum_steps})")
+    if grad_clip > 0:
+        print(f"[CLIP ] grad_clip_norm={grad_clip}")
 
     for epoch in range(1, int(cfg["EPOCHS"]) + 1):
         model.train()
@@ -977,6 +1109,7 @@ def train_and_eval_one(cfg, init_weight: str, loc_weight: str):
 
         losses = []
         uda_skipped = 0
+        nonfinite_skipped = 0
 
         opt.zero_grad(set_to_none=True)
 
@@ -989,29 +1122,35 @@ def train_and_eval_one(cfg, init_weight: str, loc_weight: str):
             x_w   = x_w.to(device, non_blocking=True)
             x_s   = x_s.to(device, non_blocking=True)
 
-            # ---- (A) supervised source loss BACKWARD FIRST (frees graph earlier)
+            # ---- (A) supervised source loss BACKWARD FIRST
             with amp_ctx():
                 logits_src = model(x_src)
                 if isinstance(logits_src, (tuple, list)):
                     logits_src = logits_src[0]
                 loss_sup = masked_ce_loss_stage2(logits_src, y_src, ce_loss)
                 if loss_sup is None:
-                    # IMPORTANT: make a zero loss that still has a grad_fn
                     loss_sup = logits_src.sum() * 0.0
 
-                loss_sup_scaled = (src_w * loss_sup) / float(accum_steps)
+            if not torch.isfinite(loss_sup):
+                nonfinite_skipped += 1
+                opt.zero_grad(set_to_none=True)
+                continue
 
-                if amp_on:
-                    scaler.scale(loss_sup_scaled).backward()
-                else:
-                    loss_sup_scaled.backward()
+            loss_sup_scaled = (src_w * loss_sup) / float(accum_steps)
 
+            if amp_on:
+                scaler.scale(loss_sup_scaled).backward()
+            else:
+                loss_sup_scaled.backward()
 
             del logits_src
 
             # ---- (B) teacher pseudo labels on weak target (no grad)
             with torch.no_grad():
-                build_mask = predict_build_mask_from_x6(loc_model, x_w, loc_a, loc_b, cfg["LOC_THRESH"])
+                build_mask = predict_build_mask_from_x6(
+                    loc_model, x_w, loc_a, loc_b, cfg["LOC_THRESH"],
+                    use_prepost_or=use_prepost_or, dilate=dilate
+                )
                 with amp_ctx():
                     t_logits = teacher(x_w)
                     if isinstance(t_logits, (tuple, list)):
@@ -1024,17 +1163,21 @@ def train_and_eval_one(cfg, init_weight: str, loc_weight: str):
                     s_logits = s_logits[0]
 
                 loss_uda = uda_pseudo_label_loss(
-                s_logits, t_logits, build_mask,
-                conf_thresh=float(cfg["PL_CONF"]),
-                temp=float(cfg["PL_TEMP"]),
-                conf_thresh_destroyed=(float(cfg["PL_CONF_DESTROYED"]) if float(cfg["PL_CONF_DESTROYED"]) > 0 else None),
-                use_kl=bool(cfg["UDA_USE_KL"]),
-            )
+                    s_logits, t_logits, build_mask,
+                    conf_thresh=float(cfg["PL_CONF"]),
+                    temp=float(cfg["PL_TEMP"]),
+                    conf_thresh_destroyed=(float(cfg["PL_CONF_DESTROYED"]) if float(cfg["PL_CONF_DESTROYED"]) > 0 else None),
+                    use_kl=bool(cfg["UDA_USE_KL"]),
+                )
 
             if loss_uda is None:
-                # IMPORTANT: zero loss connected to student graph
                 loss_uda = s_logits.sum() * 0.0
                 uda_skipped += 1
+
+            if not torch.isfinite(loss_uda):
+                nonfinite_skipped += 1
+                opt.zero_grad(set_to_none=True)
+                continue
 
             loss_uda_scaled = (uda_w * loss_uda) / float(accum_steps)
 
@@ -1043,15 +1186,21 @@ def train_and_eval_one(cfg, init_weight: str, loc_weight: str):
             else:
                 loss_uda_scaled.backward()
 
-
-
             del s_logits, t_logits, build_mask
 
-            # track unscaled total for logging
-            losses.append(float((src_w * loss_sup + uda_w * loss_uda).detach().cpu().item()))
+            total_loss = (src_w * loss_sup + uda_w * loss_uda).detach()
+            if torch.isfinite(total_loss):
+                losses.append(float(total_loss.cpu().item()))
+            else:
+                nonfinite_skipped += 1
 
             # ---- optimizer step each ACCUM_STEPS
             if (step_idx + 1) % accum_steps == 0:
+                if grad_clip > 0:
+                    if amp_on:
+                        scaler.unscale_(opt)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
+
                 if amp_on:
                     scaler.step(opt)
                     scaler.update()
@@ -1066,7 +1215,7 @@ def train_and_eval_one(cfg, init_weight: str, loc_weight: str):
 
         print(f"[EPOCH {epoch:02d}/{cfg['EPOCHS']}] "
               f"train_loss={train_loss:.5f} | val_loss={val_loss:.5f} "
-              f"| src_w={src_w:.3f} uda_w={uda_w:.3f} | uda_skipped_steps={uda_skipped}")
+              f"| src_w={src_w:.3f} uda_w={uda_w:.3f} | uda_none_steps={uda_skipped} | nonfinite_skips={nonfinite_skipped}")
 
         # save last
         torch.save({
@@ -1090,7 +1239,7 @@ def train_and_eval_one(cfg, init_weight: str, loc_weight: str):
             }, best_ckpt)
             print(f"[SAVE ] Best -> {best_ckpt}")
 
-        # curves eval
+        # curves eval (val or test)
         curve_on = str(cfg["CURVE_EVAL_SPLIT"]).lower()
         if curve_on == "test":
             curve_loader = test_ld
@@ -1100,7 +1249,8 @@ def train_and_eval_one(cfg, init_weight: str, loc_weight: str):
             curve_split_name = "val_curve"
 
         acc5, macroB, f1sD, locP, locR, locF = eval_loader_pipeline(
-            model, curve_loader, device, loc_model, loc_a, loc_b, cfg["LOC_THRESH"], amp=amp_on
+            model, curve_loader, device, loc_model, loc_a, loc_b, cfg["LOC_THRESH"],
+            use_prepost_or=use_prepost_or, dilate=dilate, amp=amp_on
         )
 
         append_csv_row(metrics_csv, METRICS_FIELDS, {
@@ -1135,7 +1285,8 @@ def train_and_eval_one(cfg, init_weight: str, loc_weight: str):
     print(f"[LOAD ] Best for FINAL TEST: {best_ckpt} (epoch={best_epoch})")
 
     acc5, macroB, f1sD, locP, locR, locF = eval_loader_pipeline(
-        model, test_ld, device, loc_model, loc_a, loc_b, cfg["LOC_THRESH"], amp=amp_on
+        model, test_ld, device, loc_model, loc_a, loc_b, cfg["LOC_THRESH"],
+        use_prepost_or=use_prepost_or, dilate=dilate, amp=amp_on
     )
 
     print("\n==================== IDA-BD TEST (PIPELINE) ====================")
