@@ -1,0 +1,2 @@
+mode,num_models,out_dir,loc_weight,loc_platt,loc_thresh,used_calib,acc,loc_precision,loc_recall,loc_f1,macroF1_damage,f1_no_damage,f1_minor,f1_major,f1_destroyed
+ensemble,12,../idabd_stage2_damage_ft_checkpoints_retrained_destroyed,,,0.5,True,0.9510027170181272,nan,nan,nan,0.659344250747346,0.8501850507104871,0.5376142637122531,0.6482390923765983,0.601338596190046
