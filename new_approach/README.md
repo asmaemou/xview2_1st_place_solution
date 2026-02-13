@@ -47,7 +47,14 @@ This improves robustness and avoids collapse on rare severe classes (especially 
 
 ## Ensemble Definition (Where “12 models” comes from)
 
+12 models come from four distinct model architectures, and for each architec-
+ture they conducted three independent runs with different
+random seeds, resulting in 4 × 3 = 12 trained models
+in total. 
 During training, we fine-tune **all 12 xView2-initialized Stage-2 damage models** spanning U-Net backbones:
+
+
+
 - **DPN92**
 - **ResNet34**
 - **SE-ResNeXt50**
