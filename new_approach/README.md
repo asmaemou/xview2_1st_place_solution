@@ -47,8 +47,7 @@ This improves robustness and avoids collapse on rare severe classes (especially 
 
 ## Ensemble Definition (Where “12 models” comes from)
 
-12 models come from four distinct model architectures, and for each architec-
-ture they conducted three independent runs with different
+12 models come from four distinct model architectures, and for each architecture they conducted three independent runs with different
 random seeds, resulting in 4 × 3 = 12 trained models
 in total. 
 During training, we fine-tune **all 12 xView2-initialized Stage-2 damage models** spanning U-Net backbones:
@@ -67,7 +66,7 @@ During inference, we ensemble the models by **averaging predictions** (mean over
 ## Key Additions Beyond xView2 First-Place Code
 
 ### 1) Destroyed-aware crop sampling (Stage 2 training)
-Ida-BD has strong class imbalance; **Destroyed** is rare. To avoid learning to ignore class 4, Stage-2 training includes **Destroyed-focused sampling**:
+Ida-BD has strong class imbalance; **Destroyed** is rare. Stage-2 training includes **Destroyed-focused sampling**:
 - With probability `focus_destroyed_p`, sample crops that contain at least `min_destroyed_px` pixels of class 4.
 
 ### 2) Optional stronger class weighting for Destroyed
@@ -81,10 +80,10 @@ We calibrate Stage-2 logits on validation pixels using **Vector Scaling**:
   \[
   z' = Wz + b
   \]
-- Calibration is applied **AMP-safe** (forced FP32 for matmul).
+- Calibration is applied 
 
-### 4) Optional Fusion Augmentation (post-disaster enhancement)
-We optionally enrich the post-disaster image using a weighted fusion of enhancement cues such as:
+### 4)  Fusion Augmentation (post-disaster enhancement)
+We  enrich the post-disaster image using a weighted fusion of enhancement cues such as:
 - Edge enhancement
 - Contrast enhancement
 - Unsharp masking
@@ -93,7 +92,7 @@ This yields an augmented post image that can improve damage separability under d
 
 ---
 
-## Repository Structure (recommended)
+<!-- ## Repository Structure (recommended)
 
 > If your repo still contains many long scripts, this section explains what each group of files does.
 
@@ -104,7 +103,7 @@ This yields an augmented post image that can improve damage separability under d
 
 Checkpoints and outputs are written into folders such as:
 - `idabd_stage1_loc_ft_checkpoints/`
-- `idabd_stage2_damage_ft_checkpoints_.../`
+- `idabd_stage2_damage_ft_checkpoints_.../` -->
 
 ---
 
@@ -115,7 +114,3 @@ Checkpoints and outputs are written into folders such as:
 - PyTorch (CUDA recommended)
 - OpenCV (`cv2`)
 - NumPy
-
-Install typical dependencies:
-```bash
-pip install -r requirements.txt
