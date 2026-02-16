@@ -25,7 +25,7 @@ new_approach/idabd_stage2_damage_ft_checkpoints_RGB+EDGES_ONLY
 new_approach/idabd_stage2_damage_ft_checkpoints_RGBplusFUSION_6ch
 new_approach/weights/
 weights/
-
+new_approach/
 
 proposed_approach/idabd_stage1_loc_ft_checkpoints/
 proposed_approach/idabd_stage2_damage_ft_checkpoints/

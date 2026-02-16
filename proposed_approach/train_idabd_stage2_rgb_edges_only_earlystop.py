@@ -1,4 +1,16 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+STAGE-2 (IDABD) — RGB + EDGES-ONLY (PAIR AUG) + EARLY STOPPING
+Fixes applied (same as your previous scripts):
+1) Windows spawn-safe (__main__ + freeze_support + set_start_method)
+2) Stage-1 auto-find bug fix: auto_find_stage1_loc_weight expects Path(__file__), NOT a string dir
+3) Robust Stage-1 discovery from --stage1_dir (optional) + fallback to auto finder
+4) Filters broken triplets so cv2.imread(...) never returns None inside dataset (prevents NoneType.shape crash)
+5) Pair augmentation callable is top-level (picklable); no nested closures needed for spawn workers
+"""
+
 import os
 from os import path
 import argparse
@@ -8,6 +20,8 @@ import cv2
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from pathlib import Path
+import multiprocessing as mp
 
 from idabd_stage2.utils.paths import ensure_zoo_importable
 ensure_zoo_importable(__file__)
@@ -33,7 +47,9 @@ from idabd_stage2.aug.edges_only import fuse_rgb_edges_pair
 
 CSV_FIELDS = [
     "seed","init_weight","loc_weight","loc_platt","loc_thresh",
+    "amp","workers",
     "fusion_p","edge_w","canny_t1","canny_t2",
+    "min_val_destroyed_tiles","min_train_destroyed_tiles",
     "pipeline_acc_uncal","pipeline_loc_precision_uncal","pipeline_loc_recall_uncal","pipeline_loc_f1_uncal",
     "pipeline_macroF1_damage_uncal","pipeline_f1_no_damage_uncal","pipeline_f1_minor_uncal",
     "pipeline_f1_major_uncal","pipeline_f1_destroyed_uncal",
@@ -42,6 +58,10 @@ CSV_FIELDS = [
     "pipeline_f1_major_cal","pipeline_f1_destroyed_cal",
 ]
 
+
+# -----------------------------
+# Robust helpers
+# -----------------------------
 def load_mask_raw(mask_path: str) -> np.ndarray:
     m = cv2.imread(mask_path, cv2.IMREAD_UNCHANGED)
     if m is None:
@@ -50,12 +70,14 @@ def load_mask_raw(mask_path: str) -> np.ndarray:
         m = cv2.cvtColor(m, cv2.COLOR_BGR2GRAY)
     return m.astype(np.int64)
 
+
 def has_destroyed(mask_path: str) -> bool:
     m = load_mask_raw(mask_path)
     v = (m != IGNORE_LABEL)
     if v.sum() == 0:
         return False
     return bool((m[v] == 4).any())
+
 
 def ensure_min_destroyed(val_tr, train_tr, min_val=1, min_train=1):
     # Ensure VAL has at least min_val destroyed tiles (swap from train if needed)
@@ -100,6 +122,99 @@ def ensure_min_destroyed(val_tr, train_tr, min_val=1, min_train=1):
 
     return train_tr, val_tr
 
+
+def filter_valid_triplets(triplets, max_report=12):
+    """
+    Prevent dataset crashes like:
+      AttributeError: 'NoneType' object has no attribute 'shape'
+    which happens when cv2.imread(...) returns None (unreadable/missing images).
+    """
+    kept, bad = [], []
+    for pre_p, post_p, mask_p in triplets:
+        pre_p, post_p, mask_p = str(pre_p), str(post_p), str(mask_p)
+
+        if (not path.exists(pre_p)) or (not path.exists(post_p)) or (not path.exists(mask_p)):
+            bad.append((pre_p, post_p, mask_p, "missing_file"))
+            continue
+
+        # validate readable pre+post (pair-aug uses both)
+        pre_im = cv2.imread(pre_p, cv2.IMREAD_COLOR)
+        post_im = cv2.imread(post_p, cv2.IMREAD_COLOR)
+        if pre_im is None:
+            bad.append((pre_p, post_p, mask_p, "cv2_imread_pre_none"))
+            continue
+        if post_im is None:
+            bad.append((pre_p, post_p, mask_p, "cv2_imread_post_none"))
+            continue
+
+        kept.append((pre_p, post_p, mask_p))
+
+    if bad:
+        print(f"[WARN] Dropped {len(bad)} broken triplets. Showing up to {max_report}:")
+        for i, (a, b, c, why) in enumerate(bad[:max_report]):
+            print(f"  {i+1:02d}) why={why}\n      pre ={a}\n      post={b}\n      mask={c}")
+
+    print(f"[INFO] Triplets: total={len(triplets)} kept={len(kept)} dropped={len(bad)}")
+    return kept
+
+
+def try_find_stage1_loc_in_dir(stage1_dir: str):
+    """Pick a likely Stage-1 localization checkpoint from a directory (if provided)."""
+    if not stage1_dir or not path.isdir(stage1_dir):
+        return ""
+    cand = list(Path(stage1_dir).rglob("*.pth"))
+    if not cand:
+        return ""
+
+    def score(p: Path):
+        n = p.name.lower()
+        s = 0
+        if "loc" in n: s += 5
+        if "stage1" in n: s += 3
+        if "best" in n: s += 2
+        if "calib" in n or "platt" in n: s -= 5
+        if "stage2" in n or "damage" in n: s -= 5
+        return s
+
+    cand.sort(key=lambda p: (score(p), p.stat().st_mtime), reverse=True)
+    return str(cand[0])
+
+
+def try_find_platt_in_dir(stage1_dir: str):
+    """Pick a likely Platt npz from a directory (if provided)."""
+    if not stage1_dir or not path.isdir(stage1_dir):
+        return ""
+    cand = list(Path(stage1_dir).rglob("*.npz"))
+    if not cand:
+        return ""
+
+    def score(p: Path):
+        n = p.name.lower()
+        s = 0
+        if "platt" in n: s += 10
+        if "stage1" in n or "loc" in n: s += 2
+        if "stage2" in n or "damage" in n: s -= 5
+        return s
+
+    cand.sort(key=lambda p: (score(p), p.stat().st_mtime), reverse=True)
+    best = cand[0]
+    return str(best) if score(best) > 0 else ""
+
+
+# Picklable callable for DataLoader workers (spawn-safe)
+class PairEdgesTF:
+    def __init__(self, edge_w: float, t1: int, t2: int):
+        self.edge_w = float(edge_w)
+        self.t1 = int(t1)
+        self.t2 = int(t2)
+
+    def __call__(self, pre_bgr, post_bgr):
+        return fuse_rgb_edges_pair(pre_bgr, post_bgr, edge_w=self.edge_w, t1=self.t1, t2=self.t2)
+
+
+# -----------------------------
+# Main
+# -----------------------------
 def main():
     ap = argparse.ArgumentParser()
 
@@ -131,7 +246,7 @@ def main():
     ap.add_argument("--min_destroyed_px", type=int, default=50)
     ap.add_argument("--crop_attempts", type=int, default=20)
 
-    # EDGES-only params (TRAIN ONLY by default)
+    # EDGES-only params (TRAIN ONLY)
     ap.add_argument("--fusion_p", type=float, default=0.75)
     ap.add_argument("--edge_w", type=float, default=0.10)
     ap.add_argument("--canny_t1", type=int, default=50)
@@ -167,19 +282,39 @@ def main():
 
     ensure_csv(args.csv_path, CSV_FIELDS, overwrite=args.overwrite_csv)
 
-    random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
-    if torch.cuda.is_available(): torch.cuda.manual_seed_all(args.seed)
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[INFO] device={device} workers={args.workers} amp={bool(args.amp)} fusion_p={args.fusion_p}")
 
-    # Stage-1 loc (auto-find)
+    # -----------------------
+    # Stage-1 loc auto-find (fix Path/str bug)
+    # -----------------------
     if not args.loc_weight:
-        args.loc_weight = auto_find_stage1_loc_weight(args.stage1_dir)
+        args.loc_weight = try_find_stage1_loc_in_dir(args.stage1_dir)
+    if not args.loc_weight:
+        # auto_find_stage1_loc_weight expects Path(__file__), not a string dir
+        args.loc_weight = auto_find_stage1_loc_weight(Path(__file__))
+
     if not args.loc_platt:
-        args.loc_platt = auto_find_stage1_platt(args.stage1_dir)
+        args.loc_platt = try_find_platt_in_dir(args.stage1_dir)
+    if not args.loc_platt:
+        # optional fallback (may fail if none exists)
+        try:
+            args.loc_platt = auto_find_stage1_platt(args.loc_weight)
+        except Exception:
+            args.loc_platt = ""
 
     if not args.loc_weight or not path.exists(args.loc_weight):
-        raise FileNotFoundError("Stage-1 loc checkpoint not found. Pass --loc_weight explicitly.")
+        raise FileNotFoundError(
+            f"Stage-1 loc checkpoint not found.\n"
+            f"  stage1_dir={args.stage1_dir}\n"
+            f"  Pass --loc_weight explicitly if needed."
+        )
 
     loc_model = build_loc_model_from_weight(args.loc_weight).to(device).eval()
     for p in loc_model.parameters():
@@ -190,36 +325,46 @@ def main():
         d = np.load(args.loc_platt)
         loc_a, loc_b = float(d["a"]), float(d["b"])
 
+    print(f"[INFO] Stage-1 loc_weight={args.loc_weight}")
+    print(f"[INFO] Stage-1 platt={args.loc_platt} (a={loc_a:.6f}, b={loc_b:.6f})")
+
+    # -----------------------
     # Stage-2 init weights
-    init_weights = [args.init_weight] if args.init_weight else auto_find_stage2_init_weights(
-        args.weights_dir, include_idabd_finetune=args.include_idabd_finetune
-    )
+    # -----------------------
+    out = None
+    if args.init_weight:
+        init_weights = [args.init_weight]
+    else:
+        out = auto_find_stage2_init_weights(args.weights_dir, include_idabd_finetune=args.include_idabd_finetune)
+        init_weights = out[0] if isinstance(out, tuple) else out
+
     if not init_weights:
         raise FileNotFoundError("No stage-2 init weights found. Pass --init_weight or check --weights_dir.")
 
-    # Data triplets + split
+    # -----------------------
+    # Data triplets + split (+ robust filtering)
+    # -----------------------
     triplets = build_stage2_triplets(args.img_dir, args.mask_dir, gt_split=args.gt_split)
     if not triplets:
         raise FileNotFoundError("No (pre, post, mask) triplets found.")
 
+    triplets = filter_valid_triplets(triplets)
+    if not triplets:
+        raise FileNotFoundError("All triplets are invalid (missing/unreadable pre/post images).")
+
     train_tr, val_tr, test_tr = split_triplets(triplets, args.seed, args.val_ratio, args.test_ratio)
 
-    # Match your original behavior: ensure destroyed present in val/train
+    # Ensure destroyed present in val/train
     train_tr, val_tr = ensure_min_destroyed(
         val_tr, train_tr,
         min_val=args.min_val_destroyed_tiles,
         min_train=args.min_train_destroyed_tiles
     )
 
-    def pair_tf(pre_bgr, post_bgr):
-        return fuse_rgb_edges_pair(
-            pre_bgr, post_bgr,
-            edge_w=args.edge_w,
-            t1=args.canny_t1,
-            t2=args.canny_t2
-        )
+    # Pair transform (picklable)
+    pair_tf = PairEdgesTF(edge_w=args.edge_w, t1=args.canny_t1, t2=args.canny_t2)
 
-    # IMPORTANT: this matches your script ("training only")
+    # TRAIN-only augmentation
     eval_tf = None
 
     train_ds = IdaBDStage2Dataset6CHPairAug(
@@ -250,15 +395,24 @@ def main():
         pair_transform_eval=eval_tf,
     )
 
-    train_ld = DataLoader(train_ds, batch_size=args.batch, shuffle=True,
-                          num_workers=args.workers, pin_memory=True, drop_last=True)
-    val_ld = DataLoader(val_ds, batch_size=1, shuffle=False,
-                        num_workers=max(0, args.workers//2), pin_memory=True)
-    test_ld = DataLoader(test_ds, batch_size=1, shuffle=False,
-                         num_workers=max(0, args.workers//2), pin_memory=True)
+    train_ld = DataLoader(
+        train_ds, batch_size=args.batch, shuffle=True,
+        num_workers=args.workers, pin_memory=True, drop_last=True
+    )
+    val_ld = DataLoader(
+        val_ds, batch_size=1, shuffle=False,
+        num_workers=max(0, args.workers // 2), pin_memory=True
+    )
+    test_ld = DataLoader(
+        test_ds, batch_size=1, shuffle=False,
+        num_workers=max(0, args.workers // 2), pin_memory=True
+    )
 
     os.makedirs(args.out_dir, exist_ok=True)
 
+    # -----------------------
+    # Train / Calibrate / Eval for each init weight
+    # -----------------------
     for init_w in init_weights:
         if not path.exists(init_w):
             raise FileNotFoundError(init_w)
@@ -328,11 +482,15 @@ def main():
             "loc_weight": args.loc_weight,
             "loc_platt": args.loc_platt,
             "loc_thresh": args.loc_thresh,
+            "amp": bool(args.amp),
+            "workers": int(args.workers),
 
             "fusion_p": args.fusion_p,
             "edge_w": args.edge_w,
             "canny_t1": args.canny_t1,
             "canny_t2": args.canny_t2,
+            "min_val_destroyed_tiles": args.min_val_destroyed_tiles,
+            "min_train_destroyed_tiles": args.min_train_destroyed_tiles,
 
             "pipeline_acc_uncal": acc_u,
             "pipeline_loc_precision_uncal": locP_u,
@@ -360,5 +518,8 @@ def main():
         for i, name in enumerate(CLASS_NAMES_4):
             print(f"  F1 {name:>9s}: {f1_c[i]:.6f}")
 
+
 if __name__ == "__main__":
+    mp.freeze_support()
+    mp.set_start_method("spawn", force=True)
     main()
