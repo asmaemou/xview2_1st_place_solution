@@ -1,0 +1,42 @@
+CSV_FIELDS_STAGE2_PIPELINE_CONTRAST_EDGE = [
+    "seed",
+    "init_weight",
+    "loc_weight",
+    "loc_platt",
+    "loc_thresh",
+
+    "fusion_p",
+    "alpha_contrast",
+    "alpha_edge",
+    "clahe_clip",
+    "clahe_grid",
+    "canny_t1",
+    "canny_t2",
+    "edge_dilate",
+
+    "min_val_destroyed_tiles",
+    "min_train_destroyed_tiles",
+
+    "use_class_weights",
+    "destroyed_weight_mul",
+
+    "pipeline_acc_uncal",
+    "pipeline_loc_precision_uncal",
+    "pipeline_loc_recall_uncal",
+    "pipeline_loc_f1_uncal",
+    "pipeline_macroF1_damage_uncal",
+    "pipeline_f1_no_damage_uncal",
+    "pipeline_f1_minor_uncal",
+    "pipeline_f1_major_uncal",
+    "pipeline_f1_destroyed_uncal",
+
+    "pipeline_acc_cal",
+    "pipeline_loc_precision_cal",
+    "pipeline_loc_recall_cal",
+    "pipeline_loc_f1_cal",
+    "pipeline_macroF1_damage_cal",
+    "pipeline_f1_no_damage_cal",
+    "pipeline_f1_minor_cal",
+    "pipeline_f1_major_cal",
+    "pipeline_f1_destroyed_cal",
+]
