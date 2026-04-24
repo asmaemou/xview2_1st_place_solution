@@ -75,8 +75,9 @@ for cand in [THIS_DIR, THIS_DIR.parent, THIS_DIR.parent.parent]:
 # ---------------------------------------------------------------------
 # Defaults (auto detection will override when possible)
 # ---------------------------------------------------------------------
-IMG_DIR = "../idabd/images"
-MASK_DIR = "../idabd/masks"
+IMG_DIR="/homes/j244s673/documents/wsu/phd/idabd/PRJ-5770/Project--ian-bd-pre-and-post-disaster-high-resolution-aerial-imagery-for-building-damage-assessment-from-hurricane-ian/data/images"
+
+MASK_DIR="/homes/j244s673/documents/wsu/phd/idabd/PRJ-5770/Project--ian-bd-pre-and-post-disaster-high-resolution-aerial-imagery-for-building-damage-assessment-from-hurricane-ian/data/masks"
 
 # expected output folder from RGB-only baseline training script
 DEFAULT_STAGE2_DIR = "idabd_stage2_damage_ft_checkpoints_RGB_ONLY_BASELINE"
