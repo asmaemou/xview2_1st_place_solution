@@ -23,8 +23,9 @@ if [ ! -f "${SCRIPT}" ]; then
   SCRIPT="${JOURNAL_DIR}/scripts/eval_idabd_stage2_pipeline_RGB_contrast_edge_earlyStop.py"
 fi
 
-IMG_DIR="/homes/j244s673/documents/wsu/phd/idabd/PRJ-5770/Project--ian-bd-pre-and-post-disaster-high-resolution-aerial-imagery-for-building-damage-assessment-from-hurricane-ian/data/images"
-MASK_DIR="/homes/j244s673/documents/wsu/phd/idabd/PRJ-5770/Project--ian-bd-pre-and-post-disaster-high-resolution-aerial-imagery-for-building-damage-assessment-from-hurricane-ian/data/masks"
+IMG_DIR="/homes/j244s673/documents/wsu/phd/xview2_1st_place_solution/Journal/idabd/images"
+MASK_DIR="/homes/j244s673/documents/wsu/phd/xview2_1st_place_solution/Journal/idabd/masks"
+
 
 LOC_DIR="${JOURNAL_DIR}/outputs/idabd_stage1_loc_ft_checkpoints"
 STAGE2_DIR="${JOURNAL_DIR}/idabd_stage2_damage_ft_checkpoints_RGB_CONTRAST_EDGE_ONLY"
