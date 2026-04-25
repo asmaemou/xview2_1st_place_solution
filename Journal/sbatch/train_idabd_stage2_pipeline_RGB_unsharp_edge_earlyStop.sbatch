@@ -20,10 +20,7 @@ SCRIPT="${JOURNAL_DIR}/scripts/train_idabd_stage2_pipeline_RGB_unsharp_edge_earl
 IMG_DIR="/homes/j244s673/documents/wsu/phd/idabd/PRJ-5770/Project--ian-bd-pre-and-post-disaster-high-resolution-aerial-imagery-for-building-damage-assessment-from-hurricane-ian/data/images"
 MASK_DIR="/homes/j244s673/documents/wsu/phd/idabd/PRJ-5770/Project--ian-bd-pre-and-post-disaster-high-resolution-aerial-imagery-for-building-damage-assessment-from-hurricane-ian/data/masks"
 
-# Stage-2 source pretrained classification weights
 WEIGHTS_DIR="${REPO_DIR}/new_approach/weights"
-
-# Stage-1 localization checkpoint used for pipeline gating
 LOC_WEIGHT="${JOURNAL_DIR}/outputs/idabd_stage1_loc_ft_checkpoints/se154_loc_0_1_best_idabd_ft_best.pth"
 
 OUT_DIR="${JOURNAL_DIR}/outputs/idabd_stage2_damage_ft_checkpoints_RGB_UNSHARP_EDGE_ONLY"
@@ -51,40 +48,8 @@ echo "LOC_WEIGHT: ${LOC_WEIGHT}"
 echo "OUT_DIR: ${OUT_DIR}"
 echo "CSV_PATH: ${CSV_PATH}"
 
-echo "===== ENV CHECK ====="
 "${ENV_PY}" -V
 nvidia-smi || true
-
-"${ENV_PY}" - <<'PY'
-import sys, torch, numpy, cv2
-print("python exe:", sys.executable)
-print("torch:", torch.__version__)
-print("torch cuda:", torch.version.cuda)
-print("cuda available:", torch.cuda.is_available())
-if torch.cuda.is_available():
-    print("gpu:", torch.cuda.get_device_name(0))
-print("numpy:", numpy.__version__)
-print("cv2:", cv2.__version__)
-
-import zoo.models as zm
-print("zoo.models import: OK")
-print("Dpn92_Unet_Double:", hasattr(zm, "Dpn92_Unet_Double"))
-print("Res34_Unet_Double:", hasattr(zm, "Res34_Unet_Double"))
-print("SeResNext50_Unet_Double:", hasattr(zm, "SeResNext50_Unet_Double"))
-print("SeNet154_Unet_Double:", hasattr(zm, "SeNet154_Unet_Double"))
-print("Dpn92_Unet_Loc:", hasattr(zm, "Dpn92_Unet_Loc"))
-print("Res34_Unet_Loc:", hasattr(zm, "Res34_Unet_Loc"))
-print("SeResNext50_Unet_Loc:", hasattr(zm, "SeResNext50_Unet_Loc"))
-print("SeNet154_Unet_Loc:", hasattr(zm, "SeNet154_Unet_Loc"))
-
-if not torch.cuda.is_available():
-    raise SystemExit("CUDA is not available inside the Slurm job.")
-PY
-
-echo "===== CHECK FILES ====="
-ls -lh "${SCRIPT}"
-ls -lh "${LOC_WEIGHT}"
-ls -lh "${WEIGHTS_DIR}"/*cls*.pth
 
 "${ENV_PY}" -u "${SCRIPT}" \
   --img_dir "${IMG_DIR}" \
