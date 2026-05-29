@@ -46,18 +46,41 @@ CLASS_RGB = {
 }
 
 
+def bytes_to_mb(num_bytes: int) -> float:
+    return round(float(num_bytes) / (1024 ** 2), 2)
+
+
+def bytes_to_gb(num_bytes: int) -> float:
+    return round(float(num_bytes) / (1024 ** 3), 3)
+
+
+def safe_file_size_bytes(path) -> int:
+    try:
+        return Path(path).stat().st_size
+    except Exception:
+        return 0
+
+
+def estimate_tensor_memory_mb(*tensors) -> float:
+    total_bytes = 0
+
+    for tensor in tensors:
+        if tensor is None:
+            continue
+
+        try:
+            total_bytes += tensor.nelement() * tensor.element_size()
+        except Exception:
+            pass
+
+    return bytes_to_mb(total_bytes)
+
+
 def unsharp_bgr(img_bgr: np.ndarray, amount: float = 1.0, sigma: float = 1.0) -> np.ndarray:
     """
     Match the RGB + Unsharp experiment.
 
-    Input:
-      BGR uint8 image
-
-    Output:
-      BGR uint8 sharpened image
-
-    Formula:
-      sharp = image * (1 + amount) - blur * amount
+    sharp = image * (1 + amount) - blur * amount
     """
     if amount <= 0:
         return img_bgr
@@ -82,8 +105,6 @@ def unsharp_bgr(img_bgr: np.ndarray, amount: float = 1.0, sigma: float = 1.0) ->
 
 def blend_bgr(a: np.ndarray, b: np.ndarray, alpha: float) -> np.ndarray:
     """
-    Blend two BGR images.
-
     post_used = (1 - alpha) * post + alpha * unsharp(post)
     """
     alpha = float(np.clip(alpha, 0.0, 1.0))
@@ -608,6 +629,44 @@ def main():
 
     gpu_info = get_gpu_runtime_info(device)
 
+    # ------------------------------------------------------------------
+    # Actual numeric complexity proxies
+    # ------------------------------------------------------------------
+    pixel_model_evaluations = int(num_total_models * num_pixels)
+
+    input_tensor_memory_mb = estimate_tensor_memory_mb(x6)
+
+    prediction_tensor_memory_mb = estimate_tensor_memory_mb(
+        build_mask,
+        damage_pred,
+        pred_final,
+    )
+
+    numpy_output_memory_mb = bytes_to_mb(
+        pred_np.nbytes
+        + gt_mask.nbytes
+        + building_mask.nbytes
+        + color_mask_rgb.nbytes
+    )
+
+    checkpoint_size_bytes = 0
+
+    for weight_path in loc_used:
+        checkpoint_size_bytes += safe_file_size_bytes(weight_path)
+
+    for weight_path in stage2_used:
+        checkpoint_size_bytes += safe_file_size_bytes(weight_path)
+
+    checkpoint_size_mb = bytes_to_mb(checkpoint_size_bytes)
+    checkpoint_size_gb = bytes_to_gb(checkpoint_size_bytes)
+
+    estimated_runtime_arrays_mb = round(
+        float(input_tensor_memory_mb)
+        + float(prediction_tensor_memory_mb)
+        + float(numpy_output_memory_mb),
+        2,
+    )
+
     postprocess_seconds = time.perf_counter() - postprocess_start_time
     total_script_seconds = time.perf_counter() - script_start_time
 
@@ -635,22 +694,42 @@ def main():
         "gpu_name": gpu_info["gpu_name"],
         "gpu_peak_allocated_mb": gpu_info["gpu_peak_allocated_mb"],
         "gpu_peak_reserved_mb": gpu_info["gpu_peak_reserved_mb"],
+
         "image_height": image_h,
         "image_width": image_w,
         "num_pixels": num_pixels,
+
         "localization_models": num_loc_models,
         "damage_models": num_stage2_models,
         "total_models": num_total_models,
+
         "preprocess_seconds": round(float(preprocess_seconds), 3),
         "model_load_seconds": round(float(model_load_seconds), 3),
         "model_inference_seconds": round(float(inference_seconds), 3),
         "postprocess_seconds": round(float(postprocess_seconds), 3),
         "total_script_seconds": round(float(total_script_seconds), 3),
+
         "time_complexity": "O((N_loc + N_damage) × H × W)",
         "space_complexity": "O(H × W × C + model_weights)",
+
+        "actual_time_work_units": pixel_model_evaluations,
+        "actual_time_work_units_label": "pixel-model evaluations",
+        "actual_time_work_formula": (
+            f"{num_total_models} models × {image_h} × {image_w} pixels"
+        ),
+
+        "actual_space_input_tensor_mb": input_tensor_memory_mb,
+        "actual_space_prediction_tensors_mb": prediction_tensor_memory_mb,
+        "actual_space_numpy_outputs_mb": numpy_output_memory_mb,
+        "actual_space_runtime_arrays_mb": estimated_runtime_arrays_mb,
+
+        "checkpoint_size_mb": checkpoint_size_mb,
+        "checkpoint_size_gb": checkpoint_size_gb,
+
         "complexity_note": (
-            "Time and space complexity are theoretical estimates. "
-            "Runtime and GPU memory values are measured during this prediction."
+            "Big-O complexity is theoretical. The actual numeric work estimate is "
+            "reported as pixel-model evaluations. Actual memory is reported using "
+            "measured GPU peak memory plus estimated tensor/output/checkpoint sizes."
         ),
     }
 
