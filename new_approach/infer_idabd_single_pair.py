@@ -1,3 +1,4 @@
+# # THE BELOW VERSION IS ONLY WITH THE RGB+UNSHARP THE BWELOW VERSION WILL WORK WITH THE FIRST PLACE SOLUTION AS WELL
 # #!/usr/bin/env python3
 
 # import argparse
@@ -38,7 +39,7 @@
 # }
 
 # CLASS_RGB = {
-#     0: (0, 0, 0),          # background
+#     0: (0, 0, 0),          # background - black
 #     1: (34, 197, 94),     # no damage - green
 #     2: (234, 179, 8),     # minor - yellow
 #     3: (249, 115, 22),    # major - orange
@@ -76,7 +77,11 @@
 #     return bytes_to_mb(total_bytes)
 
 
-# def unsharp_bgr(img_bgr: np.ndarray, amount: float = 1.0, sigma: float = 1.0) -> np.ndarray:
+# def unsharp_bgr(
+#     img_bgr: np.ndarray,
+#     amount: float = 1.0,
+#     sigma: float = 1.0,
+# ) -> np.ndarray:
 #     """
 #     Match the RGB + Unsharp experiment.
 
@@ -442,6 +447,19 @@
 #     parser.add_argument("--unsharp_amount", type=float, default=1.0)
 #     parser.add_argument("--unsharp_sigma", type=float, default=1.0)
 
+#     # Calibration behavior:
+#     # required = your Ida-BD calibrated model, calibration .npz files must exist
+#     # none     = released xView2 first-place weights, no Ida-BD calibration files
+#     parser.add_argument(
+#         "--stage2_calibration_mode",
+#         choices=["required", "none"],
+#         default="required",
+#         help=(
+#             "Use 'required' for calibrated Ida-BD Stage 2 checkpoints. "
+#             "Use 'none' for released xView2 first-place weights without calibration files."
+#         ),
+#     )
+
 #     args = parser.parse_args()
 
 #     script_start_time = time.perf_counter()
@@ -477,6 +495,8 @@
 #     # ------------------------------------------------------------------
 #     # Match the RGB + Unsharp experiment:
 #     # post_for_model = blend(post_image, unsharp(post_image), alpha)
+#     # For xView2 first-place released weights, alpha is passed as 0.0,
+#     # so post_for_model is the original post-disaster image.
 #     # ------------------------------------------------------------------
 #     post_unsharp = unsharp_bgr(
 #         post_image,
@@ -490,10 +510,20 @@
 #         alpha=args.unsharp_alpha,
 #     )
 
-#     print("[PREPROCESSING] RGB + Unsharp", flush=True)
+#     preprocessing_name = (
+#         "RGB_PLUS_UNSHARP"
+#         if float(args.unsharp_alpha) > 0
+#         else "RGB_ORIGINAL_NO_UNSHARP"
+#     )
+
+#     print(f"[PREPROCESSING] {preprocessing_name}", flush=True)
 #     print(f"[UNSHARP] alpha={args.unsharp_alpha}", flush=True)
 #     print(f"[UNSHARP] amount={args.unsharp_amount}", flush=True)
 #     print(f"[UNSHARP] sigma={args.unsharp_sigma}", flush=True)
+#     print(
+#         f"[STAGE2_CALIBRATION_MODE] {args.stage2_calibration_mode}",
+#         flush=True,
+#     )
 
 #     pre_padded, _ = pad_to_factor(pre_image, 32)
 #     post_padded, _ = pad_to_factor(post_for_model, 32)
@@ -518,11 +548,14 @@
 #         loc_glob=args.loc_glob,
 #     )
 
+#     require_stage2_calibration = args.stage2_calibration_mode == "required"
+
 #     stage2_pack, stage2_used = load_stage2_pack(
 #         args.stage2_dir,
 #         device=device,
 #         stage2_glob=args.stage2_glob,
 #         stage2_max_models=args.stage2_max_models,
+#         require_calibration=require_stage2_calibration,
 #     )
 
 #     if device.type == "cuda":
@@ -681,10 +714,12 @@
 #         "stage2_glob": args.stage2_glob,
 #         "loc_thresh": args.loc_thresh,
 #         "stage2_max_models": args.stage2_max_models,
-#         "preprocessing": "RGB_PLUS_UNSHARP",
+#         "preprocessing": preprocessing_name,
 #         "unsharp_alpha": args.unsharp_alpha,
 #         "unsharp_amount": args.unsharp_amount,
 #         "unsharp_sigma": args.unsharp_sigma,
+#         "stage2_calibration_mode": args.stage2_calibration_mode,
+#         "stage2_calibration_required": require_stage2_calibration,
 #         "gt_mask_unique_values": sorted(np.unique(gt_mask).astype(int).tolist()),
 #     }
 
@@ -726,6 +761,9 @@
 #         "checkpoint_size_mb": checkpoint_size_mb,
 #         "checkpoint_size_gb": checkpoint_size_gb,
 
+#         "preprocessing": preprocessing_name,
+#         "stage2_calibration_mode": args.stage2_calibration_mode,
+
 #         "complexity_note": (
 #             "Big-O complexity is theoretical. The actual numeric work estimate is "
 #             "reported as pixel-model evaluations. Actual memory is reported using "
@@ -747,7 +785,6 @@
 
 # if __name__ == "__main__":
 #     main()
-# THE BELOW VERSION IS ONLY WITH THE RGB+UNSHARP THE BWELOW VERSION WILL WORK WITH THE FIRST PLACE SOLUTION AS WELL
 #!/usr/bin/env python3
 
 import argparse
@@ -788,11 +825,11 @@ CLASS_NAMES = {
 }
 
 CLASS_RGB = {
-    0: (0, 0, 0),          # background
-    1: (34, 197, 94),     # no damage - green
-    2: (234, 179, 8),     # minor - yellow
-    3: (249, 115, 22),    # major - orange
-    4: (220, 38, 38),     # destroyed - red
+    0: (0, 0, 0),        # background - black
+    1: (0, 255, 0),      # no damage - green
+    2: (255, 255, 0),    # minor - yellow
+    3: (255, 165, 0),    # major - orange
+    4: (255, 0, 0),      # destroyed - red
 }
 
 
@@ -831,11 +868,6 @@ def unsharp_bgr(
     amount: float = 1.0,
     sigma: float = 1.0,
 ) -> np.ndarray:
-    """
-    Match the RGB + Unsharp experiment.
-
-    sharp = image * (1 + amount) - blur * amount
-    """
     if amount <= 0:
         return img_bgr
 
@@ -858,9 +890,6 @@ def unsharp_bgr(
 
 
 def blend_bgr(a: np.ndarray, b: np.ndarray, alpha: float) -> np.ndarray:
-    """
-    post_used = (1 - alpha) * post + alpha * unsharp(post)
-    """
     alpha = float(np.clip(alpha, 0.0, 1.0))
 
     if alpha <= 0:
@@ -931,16 +960,6 @@ def normalize_ground_truth_mask(mask_path: str, target_shape) -> np.ndarray:
 
 
 def compute_f1_scores(pred_mask: np.ndarray, gt_mask: np.ndarray) -> dict:
-    """
-    pred_mask and gt_mask expected values:
-      0   = background
-      1   = no damage
-      2   = minor damage
-      3   = major damage
-      4   = destroyed
-      255 = ignore
-    """
-
     class_names = {
         1: "no_damage_f1",
         2: "minor_f1",
@@ -949,7 +968,6 @@ def compute_f1_scores(pred_mask: np.ndarray, gt_mask: np.ndarray) -> dict:
     }
 
     valid = gt_mask != 255
-
     scores = {}
 
     for class_id, metric_name in class_names.items():
@@ -981,11 +999,6 @@ def compute_f1_scores(pred_mask: np.ndarray, gt_mask: np.ndarray) -> dict:
 
 
 def compute_localization_metrics(pred_mask: np.ndarray, gt_mask: np.ndarray) -> dict:
-    """
-    Localization compares building vs background.
-    Any class 1..4 is considered building.
-    """
-
     valid = gt_mask != 255
 
     pred_building = (pred_mask > 0) & valid
@@ -1007,17 +1020,6 @@ def compute_localization_metrics(pred_mask: np.ndarray, gt_mask: np.ndarray) -> 
 
 
 def summarize_by_connected_components(pred_mask: np.ndarray, min_area: int = 20) -> dict:
-    """
-    Count building instances approximately using connected components.
-
-    pred_mask:
-      0 = background
-      1 = no_damage
-      2 = minor
-      3 = major
-      4 = destroyed
-    """
-
     building_binary = (pred_mask > 0).astype(np.uint8)
 
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
@@ -1128,7 +1130,6 @@ def make_overlay(
         )
 
     mask_pixels = pred_mask > 0
-
     overlay = post_rgb.copy()
 
     if mask_pixels.any():
@@ -1191,14 +1192,10 @@ def main():
 
     parser.add_argument("--model_name", default="RGB + Unsharp Model")
 
-    # Must match your RGB + Unsharp experiment.
     parser.add_argument("--unsharp_alpha", type=float, default=0.6)
     parser.add_argument("--unsharp_amount", type=float, default=1.0)
     parser.add_argument("--unsharp_sigma", type=float, default=1.0)
 
-    # Calibration behavior:
-    # required = your Ida-BD calibrated model, calibration .npz files must exist
-    # none     = released xView2 first-place weights, no Ida-BD calibration files
     parser.add_argument(
         "--stage2_calibration_mode",
         choices=["required", "none"],
@@ -1213,9 +1210,6 @@ def main():
 
     script_start_time = time.perf_counter()
 
-    # ------------------------------------------------------------------
-    # Image loading + preprocessing timer
-    # ------------------------------------------------------------------
     preprocess_start_time = time.perf_counter()
 
     pre_image = cv2.imread(args.pre_image, cv2.IMREAD_COLOR)
@@ -1233,6 +1227,7 @@ def main():
             "Resizing post image to match pre image.",
             flush=True,
         )
+
         post_image = cv2.resize(
             post_image,
             (pre_image.shape[1], pre_image.shape[0]),
@@ -1241,12 +1236,6 @@ def main():
 
     original_h, original_w = pre_image.shape[:2]
 
-    # ------------------------------------------------------------------
-    # Match the RGB + Unsharp experiment:
-    # post_for_model = blend(post_image, unsharp(post_image), alpha)
-    # For xView2 first-place released weights, alpha is passed as 0.0,
-    # so post_for_model is the original post-disaster image.
-    # ------------------------------------------------------------------
     post_unsharp = unsharp_bgr(
         post_image,
         amount=args.unsharp_amount,
@@ -1269,10 +1258,7 @@ def main():
     print(f"[UNSHARP] alpha={args.unsharp_alpha}", flush=True)
     print(f"[UNSHARP] amount={args.unsharp_amount}", flush=True)
     print(f"[UNSHARP] sigma={args.unsharp_sigma}", flush=True)
-    print(
-        f"[STAGE2_CALIBRATION_MODE] {args.stage2_calibration_mode}",
-        flush=True,
-    )
+    print(f"[STAGE2_CALIBRATION_MODE] {args.stage2_calibration_mode}", flush=True)
 
     pre_padded, _ = pad_to_factor(pre_image, 32)
     post_padded, _ = pad_to_factor(post_for_model, 32)
@@ -1286,9 +1272,6 @@ def main():
 
     preprocess_seconds = time.perf_counter() - preprocess_start_time
 
-    # ------------------------------------------------------------------
-    # Model loading timer
-    # ------------------------------------------------------------------
     model_load_start_time = time.perf_counter()
 
     loc_pack, loc_used = load_loc_pack(
@@ -1320,9 +1303,6 @@ def main():
     for weight in stage2_used:
         print(f"  - {weight}", flush=True)
 
-    # ------------------------------------------------------------------
-    # Inference timer + GPU peak memory
-    # ------------------------------------------------------------------
     if device.type == "cuda":
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
@@ -1352,9 +1332,6 @@ def main():
 
     inference_seconds = time.perf_counter() - inference_start_time
 
-    # ------------------------------------------------------------------
-    # Postprocessing timer
-    # ------------------------------------------------------------------
     postprocess_start_time = time.perf_counter()
 
     pred_np = pred_final[0].detach().cpu().numpy().astype(np.uint8)
@@ -1412,7 +1389,7 @@ def main():
     gpu_info = get_gpu_runtime_info(device)
 
     # ------------------------------------------------------------------
-    # Actual numeric complexity proxies
+    # Actual numeric time and space complexity estimates
     # ------------------------------------------------------------------
     pixel_model_evaluations = int(num_total_models * num_pixels)
 
@@ -1447,6 +1424,16 @@ def main():
         + float(prediction_tensor_memory_mb)
         + float(numpy_output_memory_mb),
         2,
+    )
+
+    total_estimated_space_mb = round(
+        float(estimated_runtime_arrays_mb) + float(checkpoint_size_mb),
+        2,
+    )
+
+    total_estimated_space_gb = round(
+        float(total_estimated_space_mb) / 1024.0,
+        3,
     )
 
     postprocess_seconds = time.perf_counter() - postprocess_start_time
@@ -1499,7 +1486,15 @@ def main():
         "actual_time_work_units": pixel_model_evaluations,
         "actual_time_work_units_label": "pixel-model evaluations",
         "actual_time_work_formula": (
-            f"{num_total_models} models × {image_h} × {image_w} pixels"
+            f"({num_loc_models} + {num_stage2_models}) × {image_h} × {image_w}"
+        ),
+
+        "actual_time_complexity_value": pixel_model_evaluations,
+        "actual_time_complexity_label": "pixel-model evaluations",
+        "actual_time_complexity_formula": (
+            f"({num_loc_models} localization models + "
+            f"{num_stage2_models} damage models) × "
+            f"{image_h} × {image_w} pixels"
         ),
 
         "actual_space_input_tensor_mb": input_tensor_memory_mb,
@@ -1510,13 +1505,20 @@ def main():
         "checkpoint_size_mb": checkpoint_size_mb,
         "checkpoint_size_gb": checkpoint_size_gb,
 
+        "actual_space_complexity_mb": total_estimated_space_mb,
+        "actual_space_complexity_gb": total_estimated_space_gb,
+        "actual_space_complexity_formula": (
+            f"{estimated_runtime_arrays_mb} MB runtime arrays + "
+            f"{checkpoint_size_mb} MB checkpoint weights"
+        ),
+
         "preprocessing": preprocessing_name,
         "stage2_calibration_mode": args.stage2_calibration_mode,
 
         "complexity_note": (
-            "Big-O complexity is theoretical. The actual numeric work estimate is "
-            "reported as pixel-model evaluations. Actual memory is reported using "
-            "measured GPU peak memory plus estimated tensor/output/checkpoint sizes."
+            "Big-O complexity is theoretical. The actual numeric time estimate is "
+            "reported as pixel-model evaluations. The actual numeric space estimate "
+            "is reported as runtime arrays plus checkpoint weights."
         ),
     }
 
