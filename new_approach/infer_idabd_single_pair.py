@@ -1323,7 +1323,7 @@ def main():
             x6,
             use_amp=args.amp,
         )
-
+        print(f"[DEBUG] damage_pred unique raw values: {torch.unique(damage_pred).tolist()}", flush=True)
         pred_final = torch.zeros_like(damage_pred)
         pred_final[build_mask] = damage_pred[build_mask]
 
